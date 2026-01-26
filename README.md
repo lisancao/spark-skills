@@ -24,7 +24,7 @@ cp -r spark-skills/ your-project/.claude/skills/spark/
 Or add as a submodule:
 
 ```bash
-git submodule add https://github.com/YOUR_ORG/spark-skills .claude/skills/spark
+git submodule add https://github.com/lisancao/spark-skills .claude/skills/spark
 ```
 
 ## Version Support
