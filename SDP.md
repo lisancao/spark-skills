@@ -10,20 +10,20 @@ A comprehensive guide for working with Spark 4.1+ Declarative Pipelines, from fi
 
 1. [What is SDP?](#what-is-sdp)
 2. [Prerequisites](#prerequisites)
-3. [Core Concepts](#core-concepts)
-4. [Schema Discovery](#schema-discovery)
-5. [Your First Pipeline](#your-first-pipeline)
-6. [The SDP API](#the-sdp-api)
-7. [Pipeline Configuration](#pipeline-configuration)
-8. [CLI Reference](#cli-reference)
-9. [Patterns & Best Practices](#patterns--best-practices)
-10. [Streaming Pipelines](#streaming-pipelines)
-11. [Performance Tuning](#performance-tuning)
-12. [Testing Strategies](#testing-strategies)
-13. [Production Operations](#production-operations)
-14. [Migration from Imperative](#migration-from-imperative)
-15. [Troubleshooting](#troubleshooting)
-16. [When NOT to Use SDP](#when-not-to-use-sdp)
+3. [When NOT to Use SDP](#when-not-to-use-sdp) ← Read early!
+4. [Core Concepts](#core-concepts)
+5. [Schema Discovery](#schema-discovery)
+6. [Your First Pipeline](#your-first-pipeline)
+7. [The SDP API](#the-sdp-api)
+8. [Pipeline Configuration](#pipeline-configuration)
+9. [CLI Reference](#cli-reference)
+10. [Patterns & Best Practices](#patterns--best-practices)
+11. [Streaming Pipelines](#streaming-pipelines)
+12. [Performance Tuning](#performance-tuning)
+13. [Testing Strategies](#testing-strategies)
+14. [Production Operations](#production-operations)
+15. [Migration from Imperative](#migration-from-imperative)
+16. [Troubleshooting](#troubleshooting)
 17. [Quick Reference](#quick-reference)
 
 ---
@@ -106,7 +106,8 @@ The decorator says "I want a table called X". The function body says "here's the
 ### Environment Requirements
 
 - **Spark 4.1.0+** (SDP not available in earlier versions)
-- **Python 3.10+**
+- **Python 3.10+** (dropped 3.9)
+- **JDK 17+** (dropped 8/11)
 - **spark-pipelines CLI** (bundled with Spark 4.1+)
 
 ### Verify Installation
@@ -119,6 +120,30 @@ spark-submit --version
 # Check CLI available
 spark-pipelines --help
 ```
+
+---
+
+## When NOT to Use SDP
+
+> **Read this first!** SDP isn't always the right choice. Check if your use case fits before investing time.
+
+| Scenario | Use Instead |
+|----------|-------------|
+| One-off analysis/exploration | Interactive notebooks |
+| Complex control flow (if/else at pipeline level) | Imperative scripts |
+| Non-Spark processing steps | Airflow/Dagster |
+| Spark < 4.1 | Imperative PySpark |
+| Real-time with sub-second latency | Kafka Streams, Flink |
+| Very simple ETL (one table) | Plain spark-submit |
+| Heavy use of `spark.sql()` | Imperative (SQL not detected for deps) |
+
+### Signs SDP Might Not Fit
+
+- You need complex branching logic between tables
+- Tables have runtime-determined dependencies
+- You're doing more `spark.sql()` than DataFrame API
+- You need custom write modes per table
+- Your team isn't comfortable with decorators
 
 ---
 
@@ -1285,6 +1310,18 @@ def create_silver_orders(spark):
 
 ## Troubleshooting
 
+### Quick Error Lookup
+
+| Error Message | Likely Fix |
+|---------------|------------|
+| `NameError: name 'spark' is not defined` | Add `spark: Any` at module level |
+| `Table 'X' not found` | Use full path: `spark.table("catalog.database.table")` |
+| `Circular dependency detected` | Break cycle by restructuring |
+| `Cannot write to table` | Remove `.write()` calls from decorated functions |
+| `Module 'pyspark' has no attribute 'pipelines'` | Upgrade to Spark 4.1+ |
+| `Expected DataFrame, got NoneType` | Ensure function returns DataFrame |
+| `Import error: from pyspark import pipelines` | Check Spark 4.1+ is installed |
+
 ### Error: "NameError: name 'spark' is not defined"
 
 **Cause:** Missing module-level `spark` declaration.
@@ -1391,30 +1428,6 @@ def orders():
     logging.info(f"Input rows: {df.count()}")  # Debug only!
     return df.filter(...)
 ```
-
----
-
-## When NOT to Use SDP
-
-SDP isn't always the right choice:
-
-| Scenario | Use Instead |
-|----------|-------------|
-| One-off analysis/exploration | Interactive notebooks |
-| Complex control flow (if/else at pipeline level) | Imperative scripts |
-| Non-Spark processing steps | Airflow/Dagster |
-| Spark < 4.1 | Imperative PySpark |
-| Real-time with sub-second latency | Kafka Streams, Flink |
-| Very simple ETL (one table) | Plain spark-submit |
-| Heavy use of `spark.sql()` | Imperative (SQL not detected for deps) |
-
-### Signs SDP Might Not Fit
-
-- You need complex branching logic between tables
-- Tables have runtime-determined dependencies
-- You're doing more `spark.sql()` than DataFrame API
-- You need custom write modes per table
-- Your team isn't comfortable with decorators
 
 ---
 

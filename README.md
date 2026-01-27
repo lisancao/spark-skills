@@ -34,6 +34,22 @@ git submodule add https://github.com/lisancao/spark-skills .claude/skills/spark
 | Spark 4.1 | Primary |
 | Spark 4.0 | Supported |
 
+## Spark 4.1 Requirements
+
+| Dependency | Minimum Version | Notes |
+|------------|-----------------|-------|
+| Python | 3.10+ | Dropped 3.9 support |
+| JDK | 17+ | Dropped 8/11 support |
+| Pandas | 2.2.0+ | Required for pandas API |
+| NumPy | 1.22+ | |
+| PyArrow | 15.0.0+ | Arrow-optimized UDFs |
+
+### Breaking Changes in Spark 4.x
+
+- **ANSI mode ON by default**: Division by zero, invalid casts raise errors
+- **Use `try_divide()`, `try_cast()`** for safe operations
+- **Pandas API changes**: `append()` removed, use `ps.concat()`
+
 ## Conventions
 
 ```python

@@ -11,6 +11,27 @@
 - Complex analytical queries
 - Migrating SQL from other engines
 
+## Spark 4.1 Requirements
+
+| Requirement | Version |
+|-------------|---------|
+| Python | 3.10+ (dropped 3.9) |
+| JDK | 17+ (dropped 8/11) |
+| ANSI Mode | ON by default |
+
+## Quick Reference
+
+| Task | SQL |
+|------|-----|
+| Filter rows | `WHERE status = 'active'` |
+| Group & count | `GROUP BY category HAVING COUNT(*) > 5` |
+| Window ranking | `ROW_NUMBER() OVER (PARTITION BY x ORDER BY y)` |
+| Filter on window | `QUALIFY ROW_NUMBER() OVER (...) = 1` |
+| CTE | `WITH cte AS (SELECT ...) SELECT * FROM cte` |
+| Pivot | `PIVOT (SUM(x) FOR col IN ('a', 'b'))` |
+| Merge/upsert | `MERGE INTO target USING source ON ...` |
+| Time travel | `SELECT * FROM table TIMESTAMP AS OF '...'` |
+
 ## Quick Start
 
 ```python
@@ -106,6 +127,65 @@ SELECT
     LEAD(amount, 1) OVER (PARTITION BY customer_id ORDER BY order_date) as next_amount,
     AVG(amount) OVER (PARTITION BY customer_id) as avg_amount
 FROM orders;
+```
+
+### Ranking Functions
+```sql
+SELECT
+    customer_id,
+    amount,
+    -- ROW_NUMBER: 1, 2, 3, 4, 5 (no gaps, no ties)
+    ROW_NUMBER() OVER (ORDER BY amount DESC) as row_num,
+    -- RANK: 1, 2, 2, 4, 5 (gaps after ties)
+    RANK() OVER (ORDER BY amount DESC) as rank,
+    -- DENSE_RANK: 1, 2, 2, 3, 4 (no gaps)
+    DENSE_RANK() OVER (ORDER BY amount DESC) as dense_rank,
+    -- NTILE: Divide into N buckets (quartiles, deciles)
+    NTILE(4) OVER (ORDER BY amount DESC) as quartile,
+    -- PERCENT_RANK: (rank - 1) / (total - 1), range 0-1
+    PERCENT_RANK() OVER (ORDER BY amount DESC) as pct_rank
+FROM orders;
+```
+
+### Window Frames
+```sql
+SELECT
+    order_date,
+    amount,
+    -- Rolling 3-row average
+    AVG(amount) OVER (
+        ORDER BY order_date
+        ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+    ) as rolling_avg_3,
+    -- Sum from start to current row
+    SUM(amount) OVER (
+        ORDER BY order_date
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) as cumulative_sum,
+    -- Range-based: all rows within 7 days
+    AVG(amount) OVER (
+        ORDER BY order_date
+        RANGE BETWEEN INTERVAL 7 DAYS PRECEDING AND CURRENT ROW
+    ) as weekly_avg
+FROM orders;
+```
+
+### QUALIFY Clause (Filter on Window Functions)
+```sql
+-- Get top 3 orders per customer (without subquery!)
+SELECT customer_id, order_date, amount
+FROM orders
+QUALIFY ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY amount DESC) <= 3;
+
+-- Get latest order per customer
+SELECT *
+FROM orders
+QUALIFY ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY order_date DESC) = 1;
+
+-- Filter by rank
+SELECT customer_id, category, total_spent
+FROM customer_spending
+QUALIFY RANK() OVER (PARTITION BY category ORDER BY total_spent DESC) <= 10;
 ```
 
 ### Common Table Expressions (CTEs)
@@ -269,6 +349,151 @@ FROM orders
 GROUP BY category;
 ```
 
+## Array Operations
+
+```sql
+-- Create arrays
+SELECT ARRAY(1, 2, 3) as nums;
+SELECT ARRAY('a', 'b', 'c') as letters;
+
+-- Access elements (1-indexed in SQL, 0-indexed with element_at)
+SELECT arr[1] as first_element;                    -- 1-indexed
+SELECT element_at(arr, 1) as first_element;        -- 1-indexed
+
+-- Array functions
+SELECT
+    array_size(arr) as size,
+    array_contains(arr, 'x') as has_x,
+    array_distinct(arr) as unique_vals,
+    array_sort(arr) as sorted,
+    array_join(arr, ',') as joined,
+    array_max(nums) as max_val,
+    array_min(nums) as min_val
+FROM table;
+
+-- Explode array to rows
+SELECT id, exploded_value
+FROM table
+LATERAL VIEW explode(tags) t AS exploded_value;
+
+-- Or using CROSS JOIN LATERAL
+SELECT id, tag
+FROM table
+CROSS JOIN LATERAL explode(tags) AS t(tag);
+
+-- Transform array elements
+SELECT transform(nums, x -> x * 2) as doubled;
+
+-- Filter array elements
+SELECT filter(nums, x -> x > 0) as positive;
+
+-- Aggregate array elements
+SELECT aggregate(nums, 0, (acc, x) -> acc + x) as sum;
+```
+
+## Map Operations
+
+```sql
+-- Create maps
+SELECT MAP('a', 1, 'b', 2) as my_map;
+SELECT MAP_FROM_ENTRIES(ARRAY(('a', 1), ('b', 2))) as my_map;
+
+-- Access values
+SELECT my_map['key'] as value;
+SELECT element_at(my_map, 'key') as value;
+
+-- Map functions
+SELECT
+    map_keys(my_map) as keys,
+    map_values(my_map) as values,
+    map_entries(my_map) as entries,
+    size(my_map) as count
+FROM table;
+
+-- Explode map to rows
+SELECT id, key, value
+FROM table
+LATERAL VIEW explode(my_map) t AS key, value;
+```
+
+## Struct Operations
+
+```sql
+-- Create structs
+SELECT STRUCT(1 as id, 'Alice' as name) as person;
+SELECT NAMED_STRUCT('id', 1, 'name', 'Alice') as person;
+
+-- Access fields
+SELECT person.id, person.name FROM table;
+SELECT person.* FROM table;  -- Expand all fields
+
+-- JSON to struct
+SELECT from_json(json_col, 'id INT, name STRING') as parsed;
+
+-- Struct to JSON
+SELECT to_json(person) as json_string;
+
+-- Get JSON field (without parsing entire struct)
+SELECT get_json_object(json_col, '$.name') as name;
+SELECT json_col:name as name;  -- Spark 3.0+ shorthand
+```
+
+## Set Operations
+
+```sql
+-- UNION: Combine and deduplicate
+SELECT id, name FROM table1
+UNION
+SELECT id, name FROM table2;
+
+-- UNION ALL: Combine keeping duplicates (faster)
+SELECT id, name FROM table1
+UNION ALL
+SELECT id, name FROM table2;
+
+-- INTERSECT: Rows in both
+SELECT id FROM table1
+INTERSECT
+SELECT id FROM table2;
+
+-- EXCEPT: Rows in first but not second
+SELECT id FROM table1
+EXCEPT
+SELECT id FROM table2;
+
+-- EXCEPT ALL: Keep duplicates
+SELECT id FROM table1
+EXCEPT ALL
+SELECT id FROM table2;
+```
+
+## ANSI Mode (Spark 4.x Default)
+
+Spark 4.x enables ANSI SQL mode by default, which enforces stricter behavior:
+
+```sql
+-- Division by zero: RAISES ERROR
+SELECT 1 / 0;  -- Error!
+
+-- FIX: Use try_divide for safe division
+SELECT try_divide(1, 0);  -- Returns NULL
+
+-- Invalid casts: RAISE ERROR
+SELECT CAST('abc' AS INT);  -- Error!
+
+-- FIX: Use try_cast for safe conversion
+SELECT try_cast('abc' AS INT);  -- Returns NULL
+
+-- Integer overflow: RAISES ERROR
+SELECT 2147483647 + 1;  -- Error!
+
+-- FIX: Use BIGINT or handle explicitly
+SELECT CAST(2147483647 AS BIGINT) + 1;
+
+-- try_to_date for safe date parsing
+SELECT try_to_date('2024-13-45', 'yyyy-MM-dd');  -- Returns NULL
+```
+
 ## Iceberg-Specific
 
 ### Time Travel
@@ -315,6 +540,10 @@ CALL iceberg.system.rewrite_data_files('iceberg.bronze.events');
 | `Column cannot be resolved` | Ambiguous column in join | Use table alias: `t.column` |
 | `Expression not in GROUP BY` | Select non-aggregated column | Add to GROUP BY or wrap in aggregate |
 | `Data type mismatch` | Comparing incompatible types | Use CAST: `CAST(col AS STRING)` |
+| `DIVIDE_BY_ZERO` | ANSI mode division by zero | Use `try_divide()` or add `WHERE x != 0` |
+| `CAST_INVALID_INPUT` | ANSI mode invalid cast | Use `try_cast()` for safe conversion |
+| `NUMERIC_VALUE_OUT_OF_RANGE` | ANSI mode integer overflow | Use BIGINT or DECIMAL types |
+| `Invalid call to QUALIFY` | QUALIFY without window function | QUALIFY requires window function in SELECT |
 
 ## See Also
 

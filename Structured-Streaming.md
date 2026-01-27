@@ -11,6 +11,28 @@
 - Windowed aggregations on streaming data
 - Handling late-arriving data
 
+## Spark 4.1 Requirements
+
+| Requirement | Version |
+|-------------|---------|
+| Python | 3.10+ (dropped 3.9) |
+| JDK | 17+ (dropped 8/11) |
+| Pandas | 2.2.0+ |
+| PyArrow | 15.0.0+ |
+
+## Quick Reference
+
+| Task | Code |
+|------|------|
+| Read from Kafka | `spark.readStream.format("kafka").option("subscribe", "topic")` |
+| Read from files | `spark.readStream.format("parquet").schema(schema).load(path)` |
+| Write to Iceberg | `.writeStream.format("iceberg").toTable("table")` |
+| Set watermark | `.withWatermark("event_time", "10 minutes")` |
+| Tumbling window | `f.window("event_time", "5 minutes")` |
+| Session window | `f.session_window("event_time", "10 minutes")` |
+| Custom sink | `.writeStream.foreachBatch(process_batch)` |
+| Test source | `spark.readStream.format("rate").load()` |
+
 ## Quick Start
 
 ```python
@@ -104,6 +126,156 @@ query = (df.writeStream
     .outputMode("append")
     .option("truncate", False)
     .start())
+```
+
+### foreachBatch (Custom Sinks)
+
+Use `foreachBatch` for JDBC, REST APIs, or any custom destination:
+
+```python
+def write_to_postgres(batch_df, batch_id):
+    """Write each micro-batch to PostgreSQL."""
+    (batch_df.write
+        .format("jdbc")
+        .option("url", "jdbc:postgresql://localhost:5432/mydb")
+        .option("dbtable", "events")
+        .option("user", "user")
+        .option("password", "pass")
+        .mode("append")
+        .save())
+
+query = (df.writeStream
+    .foreachBatch(write_to_postgres)
+    .option("checkpointLocation", "/checkpoints/postgres-sink")
+    .start())
+```
+
+```python
+# Multiple outputs per batch
+def multi_sink(batch_df, batch_id):
+    # Write to Iceberg
+    batch_df.write.mode("append").saveAsTable("iceberg.silver.events")
+
+    # Write aggregates to dashboard
+    agg_df = batch_df.groupBy("event_type").count()
+    agg_df.write.mode("overwrite").saveAsTable("iceberg.gold.event_counts")
+
+query = (df.writeStream
+    .foreachBatch(multi_sink)
+    .option("checkpointLocation", "/checkpoints/multi-sink")
+    .start())
+```
+
+```python
+# REST API sink
+import requests
+
+def send_to_api(batch_df, batch_id):
+    records = batch_df.toJSON().collect()
+    for record in records:
+        requests.post("https://api.example.com/events", data=record)
+
+# Note: collect() brings data to driver - use for small batches only
+```
+
+## Testing Sources
+
+### Rate Source (Generate Test Data)
+```python
+# Generates rows with timestamp and value columns
+df = (spark.readStream
+    .format("rate")
+    .option("rowsPerSecond", 100)      # 100 rows/second
+    .option("numPartitions", 4)
+    .load())
+
+# Schema: timestamp (Timestamp), value (Long)
+```
+
+### Memory Sink (Unit Testing)
+```python
+# Write to in-memory table for testing
+query = (df.writeStream
+    .format("memory")
+    .queryName("test_output")          # Table name to query
+    .outputMode("append")
+    .start())
+
+# Query results
+spark.sql("SELECT * FROM test_output").show()
+```
+
+### Socket Source (Development)
+```python
+# Read from TCP socket (netcat: nc -lk 9999)
+df = (spark.readStream
+    .format("socket")
+    .option("host", "localhost")
+    .option("port", 9999)
+    .load())
+```
+
+## Kafka Production Configuration
+
+### SSL/TLS Configuration
+```python
+df = (spark.readStream
+    .format("kafka")
+    .option("kafka.bootstrap.servers", "broker1:9093,broker2:9093")
+    .option("subscribe", "events")
+    .option("kafka.security.protocol", "SSL")
+    .option("kafka.ssl.truststore.location", "/path/to/truststore.jks")
+    .option("kafka.ssl.truststore.password", "password")
+    .option("kafka.ssl.keystore.location", "/path/to/keystore.jks")
+    .option("kafka.ssl.keystore.password", "password")
+    .load())
+```
+
+### SASL Authentication
+```python
+df = (spark.readStream
+    .format("kafka")
+    .option("kafka.bootstrap.servers", "broker:9092")
+    .option("subscribe", "events")
+    .option("kafka.security.protocol", "SASL_SSL")
+    .option("kafka.sasl.mechanism", "PLAIN")
+    .option("kafka.sasl.jaas.config",
+        "org.apache.kafka.common.security.plain.PlainLoginModule required "
+        "username='user' password='pass';")
+    .load())
+```
+
+### Consumer Group Management
+```python
+df = (spark.readStream
+    .format("kafka")
+    .option("kafka.bootstrap.servers", "localhost:9092")
+    .option("subscribe", "events")
+    .option("kafka.group.id", "my-spark-consumer-group")  # Set consumer group
+    .option("startingOffsets", "earliest")
+    .option("maxOffsetsPerTrigger", 10000)                # Rate limiting
+    .option("minOffsetsPerTrigger", 1000)                 # Min batch size
+    .load())
+```
+
+### Schema Registry Integration
+```python
+# Using Confluent Schema Registry with Avro
+from confluent_kafka.schema_registry import SchemaRegistryClient
+from pyspark.sql.avro.functions import from_avro
+
+# Get schema from registry
+schema_registry = SchemaRegistryClient({"url": "http://schema-registry:8081"})
+schema = schema_registry.get_latest_version("events-value").schema.schema_str
+
+# Decode Avro messages
+df = (spark.readStream
+    .format("kafka")
+    .option("kafka.bootstrap.servers", "localhost:9092")
+    .option("subscribe", "events")
+    .load()
+    .select(from_avro("value", schema).alias("data"))
+    .select("data.*"))
 ```
 
 ## Triggers
@@ -236,6 +408,11 @@ query.stop()
 | `Append output mode not supported` | Aggregation without watermark | Add `.withWatermark()` |
 | `Multiple streaming aggregations` | Chained aggregations | Use single aggregation or restructure |
 | `Query terminated with error` | Schema mismatch | Check source schema matches expected |
+| `Queries with streaming sources must be executed with writeStream.start()` | Using `.write()` instead of `.writeStream` | Change to `.writeStream.start()` |
+| `No output mode defined` | Missing outputMode | Add `.outputMode("append")` |
+| `Cannot convert expression to SQL` | Dynamic column in agg | Use literal column names in aggregations |
+| `Kafka topic not found` | Topic doesn't exist | Create topic or check `subscribe` option |
+| `foreachBatch function not serializable` | Closure captures non-serializable object | Move imports inside function, avoid closures |
 
 ## Checkpoint Management
 
