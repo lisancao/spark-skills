@@ -497,6 +497,72 @@ df_joined = df_orders.join(
 df_stream.join(df_static_dimension, "key", "left")
 ```
 
+### transformWithState (Spark 4.1+)
+
+Advanced stateful processing with custom state management:
+
+```python
+from pyspark.sql.streaming import StatefulProcessor, StatefulProcessorHandle
+
+class SessionTracker(StatefulProcessor):
+    """Track user sessions with custom timeout logic."""
+
+    def init(self, handle: StatefulProcessorHandle) -> None:
+        # Initialize state store
+        self.sessions = handle.getValueState("sessions")
+        self.timeout_duration = 30 * 60  # 30 minutes
+
+    def handleInputRows(self, key, rows, timer_values) -> Iterator[Row]:
+        # Get current session or create new
+        session = self.sessions.get() or {"start": None, "events": 0}
+
+        for row in rows:
+            if session["start"] is None:
+                session["start"] = row.timestamp
+            session["events"] += 1
+            session["last_event"] = row.timestamp
+
+        # Save updated state
+        self.sessions.update(session)
+
+        # Set timer for session timeout
+        timer_values.register_processing_time_timer(
+            session["last_event"] + self.timeout_duration
+        )
+
+        yield Row(
+            user_id=key,
+            session_events=session["events"],
+            session_start=session["start"]
+        )
+
+    def handleExpiredTimer(self, key, timer_values) -> Iterator[Row]:
+        # Session timed out - emit final result and clear state
+        session = self.sessions.get()
+        self.sessions.clear()
+        yield Row(
+            user_id=key,
+            session_events=session["events"],
+            session_duration=session["last_event"] - session["start"],
+            status="completed"
+        )
+
+# Apply stateful transformation
+result = (df
+    .groupByKey(lambda row: row.user_id)
+    .transformWithState(
+        SessionTracker(),
+        outputMode="update",
+        outputSchema="user_id string, session_events int, session_start timestamp"
+    ))
+```
+
+**Use Cases:**
+- Custom session windows with complex timeout logic
+- Stateful pattern detection (fraud, anomalies)
+- Custom aggregations not supported by built-in functions
+- State with TTL and cleanup logic
+
 ## Monitoring
 
 ```python

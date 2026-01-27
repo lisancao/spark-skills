@@ -365,11 +365,64 @@ df.selectExpr("try_cast(text as int) as num")
 # DataFrame.append() → Use ps.concat() with pandas API
 # Series.iteritems() → Use Series.items()
 # Int64Index, Float64Index → Use Index directly
+```
 
-# Arrow-optimized UDFs (Spark 4.1+)
-@f.udf(returnType=StringType(), useArrow=True)
-def my_udf(x):
-    return x.upper()
+## Arrow-Native UDFs (Spark 4.1+)
+
+New decorators bypass Pandas conversion for better performance:
+
+```python
+import pyarrow as pa
+import pyarrow.compute as pc
+from pyspark.sql.functions import udf
+from pyspark.sql.types import IntegerType, StringType
+
+# Arrow UDF - operates on PyArrow Arrays directly
+@udf(returnType=IntegerType())
+def arrow_add_one(s: pa.Array) -> pa.Array:
+    return pc.add(s, 1)
+
+# Use like normal UDF
+df.withColumn("incremented", arrow_add_one("value"))
+```
+
+```python
+# Arrow UDTF - vectorized table function
+from pyspark.sql.functions import udtf
+from pyspark.sql import Row
+
+@udtf(returnType="word: string, count: int")
+class WordCounter:
+    def eval(self, text: pa.Array) -> Iterator[Row]:
+        for t in text.to_pylist():
+            for word in t.split():
+                yield Row(word=word, count=1)
+
+# Use as table function
+df.select(WordCounter("text_column"))
+```
+
+### When to Use Arrow UDFs
+
+| Use Case | Recommendation |
+|----------|----------------|
+| Heavy numeric computation | ✅ Arrow UDF with `pyarrow.compute` |
+| String processing | ✅ Arrow UDF |
+| Row-by-row logic | Regular UDF (simpler) |
+| Already using Pandas | Pandas UDF |
+| Need maximum performance | Arrow UDF |
+
+## IN Subquery (Spark 4.1+)
+
+```python
+# Filter with subquery
+subquery_df = spark.table("valid_ids").select("id")
+df.filter(f.col("customer_id").isin(subquery_df))
+
+# Equivalent SQL
+df.filter(f.col("customer_id").isin(
+    spark.sql("SELECT id FROM valid_ids")
+))
 ```
 
 ## Parameterized SQL (Spark 4.1+)

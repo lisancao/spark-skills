@@ -211,6 +211,48 @@ CROSS JOIN weekly_avg w
 ORDER BY d.order_date;
 ```
 
+### Recursive CTEs (Spark 4.1+)
+```sql
+-- Traverse hierarchical data (org charts, graphs, trees)
+WITH RECURSIVE org_hierarchy AS (
+    -- Base case: top-level managers
+    SELECT id, name, manager_id, 1 as level
+    FROM employees
+    WHERE manager_id IS NULL
+
+    UNION ALL
+
+    -- Recursive case: employees under each manager
+    SELECT e.id, e.name, e.manager_id, h.level + 1
+    FROM employees e
+    JOIN org_hierarchy h ON e.manager_id = h.id
+)
+SELECT * FROM org_hierarchy ORDER BY level, name;
+
+-- Generate number sequence
+WITH RECURSIVE numbers AS (
+    SELECT 1 as n
+    UNION ALL
+    SELECT n + 1 FROM numbers WHERE n < 100
+)
+SELECT * FROM numbers;
+
+-- Bill of materials / parts explosion
+WITH RECURSIVE parts AS (
+    SELECT part_id, parent_id, quantity, 1 as depth
+    FROM bill_of_materials
+    WHERE parent_id IS NULL
+
+    UNION ALL
+
+    SELECT b.part_id, b.parent_id, b.quantity * p.quantity, p.depth + 1
+    FROM bill_of_materials b
+    JOIN parts p ON b.parent_id = p.part_id
+    WHERE p.depth < 10  -- Prevent infinite recursion
+)
+SELECT * FROM parts;
+```
+
 ### Pivoting
 ```sql
 SELECT *
@@ -465,6 +507,112 @@ SELECT id FROM table2;
 SELECT id FROM table1
 EXCEPT ALL
 SELECT id FROM table2;
+```
+
+## VARIANT Type (Spark 4.1+)
+
+Semi-structured data type for JSON-like data with automatic schema inference:
+
+```sql
+-- Create table with VARIANT column
+CREATE TABLE events (
+    id BIGINT,
+    event_data VARIANT
+) USING iceberg;
+
+-- Insert JSON data
+INSERT INTO events VALUES
+    (1, PARSE_JSON('{"user": "alice", "action": "click", "meta": {"page": "/home"}}')),
+    (2, PARSE_JSON('{"user": "bob", "action": "purchase", "amount": 99.99}'));
+
+-- Query with colon syntax (field access)
+SELECT
+    id,
+    event_data:user::STRING as user,           -- Extract as string
+    event_data:action::STRING as action,
+    event_data:meta:page::STRING as page,      -- Nested access
+    event_data:amount::DOUBLE as amount
+FROM events;
+
+-- Filter on VARIANT fields
+SELECT * FROM events
+WHERE event_data:action::STRING = 'purchase';
+
+-- Check if field exists
+SELECT * FROM events
+WHERE event_data:amount IS NOT NULL;
+```
+
+### Shredding (Performance Optimization)
+```sql
+-- Enable shredding for frequently accessed fields
+-- Stores common fields as typed Parquet columns for faster reads
+-- Trade-off: 20-50% slower writes, much faster reads
+
+ALTER TABLE events SET TBLPROPERTIES (
+    'write.parquet.variant.shredding.enabled' = 'true'
+);
+```
+
+## SQL Scripting (Spark 4.1+ GA)
+
+Procedural SQL with variables, control flow, and error handling:
+
+```sql
+-- Declare variables
+DECLARE total_count INT DEFAULT 0;
+DECLARE batch_size INT = 1000;
+
+-- Set variable from query
+SET VAR total_count = (SELECT COUNT(*) FROM orders);
+
+-- Conditional logic
+IF total_count > 10000 THEN
+    INSERT INTO large_orders_log VALUES (current_timestamp(), total_count);
+ELSEIF total_count > 1000 THEN
+    INSERT INTO medium_orders_log VALUES (current_timestamp(), total_count);
+ELSE
+    INSERT INTO small_orders_log VALUES (current_timestamp(), total_count);
+END IF;
+
+-- Loop
+WHILE batch_size > 0 DO
+    -- Process batch
+    SET VAR batch_size = batch_size - 100;
+END WHILE;
+
+-- Error handling with CONTINUE HANDLER
+DECLARE CONTINUE HANDLER FOR SQLEXCEPTION
+BEGIN
+    INSERT INTO error_log VALUES (current_timestamp(), 'Error occurred');
+END;
+```
+
+## Approximate Aggregations (Spark 4.1+)
+
+Efficient sketches for large-scale analytics:
+
+```sql
+-- Top-K frequent items (faster than GROUP BY + ORDER BY + LIMIT)
+SELECT approx_top_k(product_id, 10) as top_products
+FROM orders;
+
+-- Combine top-k results from different sources
+SELECT approx_top_k_combine(sketch_col, 10) as combined_top
+FROM aggregated_sketches;
+
+-- KLL Quantiles (approximate percentiles)
+SELECT
+    approx_percentile(amount, 0.5) as median,      -- Existing
+    approx_percentile(amount, ARRAY(0.25, 0.5, 0.75)) as quartiles
+FROM orders;
+
+-- Theta Sketch for set operations (approximate distinct)
+-- Useful for: unique visitors, distinct counts at scale
+SELECT
+    theta_sketch_distinct(user_id) as unique_users,
+    theta_sketch_union(sketch_a, sketch_b) as combined_users
+FROM user_events;
 ```
 
 ## ANSI Mode (Spark 4.x Default)
