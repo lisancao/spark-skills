@@ -32,6 +32,7 @@
 | Session window | `f.session_window("event_time", "10 minutes")` |
 | Custom sink | `.writeStream.foreachBatch(process_batch)` |
 | Test source | `spark.readStream.format("rate").load()` |
+| Continuous mode | `.trigger(continuous="1 second")` |
 
 ## Quick Start
 
@@ -292,6 +293,121 @@ df = (spark.readStream
 
 # Continuous (experimental, low latency)
 .trigger(continuous="1 second")
+```
+
+## Continuous Processing (Real-Time Mode)
+
+Continuous Processing provides **millisecond-level latency** by processing records one-at-a-time instead of in micro-batches. Use when sub-second latency is critical.
+
+> **Status:** Experimental since Spark 2.3. Use with caution in production.
+
+### When to Use Continuous Mode
+
+| Use Case | Recommended Mode |
+|----------|------------------|
+| Latency < 100ms required | Continuous |
+| Aggregations needed | Micro-batch |
+| Exactly-once semantics required | Micro-batch |
+| Complex transformations | Micro-batch |
+| Simple map operations, low latency | Continuous |
+
+### Basic Example
+
+```python
+# Continuous processing with 1-second checkpoint interval
+query = (df
+    .selectExpr("CAST(value AS STRING) as message")
+    .writeStream
+    .format("kafka")
+    .option("kafka.bootstrap.servers", "localhost:9092")
+    .option("topic", "output")
+    .option("checkpointLocation", "/checkpoints/continuous")
+    .trigger(continuous="1 second")  # Checkpoint interval, NOT processing interval
+    .start())
+```
+
+### Limitations
+
+Continuous mode has significant restrictions:
+
+| Feature | Supported? |
+|---------|------------|
+| `select`, `filter`, `map` | ✅ Yes |
+| `flatMap`, `mapPartitions` | ✅ Yes |
+| Aggregations (`groupBy`, `count`) | ❌ No |
+| Joins | ❌ No |
+| `dropDuplicates` | ❌ No |
+| Windowed operations | ❌ No |
+| Multiple streaming queries | ❌ No |
+| Kafka source | ✅ Yes |
+| Kafka sink | ✅ Yes |
+| File/Iceberg sink | ❌ No |
+| Rate source (testing) | ✅ Yes |
+
+### Supported Operations
+
+```python
+# ✅ WORKS - Simple transformations only
+query = (spark.readStream
+    .format("kafka")
+    .option("kafka.bootstrap.servers", "localhost:9092")
+    .option("subscribe", "input")
+    .load()
+    .selectExpr(
+        "CAST(key AS STRING)",
+        "CAST(value AS STRING)",
+        "UPPER(CAST(value AS STRING)) as value_upper"  # Simple map
+    )
+    .filter("length(value) > 0")  # Simple filter
+    .writeStream
+    .format("kafka")
+    .option("kafka.bootstrap.servers", "localhost:9092")
+    .option("topic", "output")
+    .option("checkpointLocation", "/checkpoints/continuous")
+    .trigger(continuous="1 second")
+    .start())
+```
+
+```python
+# ❌ FAILS - Aggregations not supported
+query = (df
+    .groupBy("key")  # NOT ALLOWED in continuous mode
+    .count()
+    .writeStream
+    .trigger(continuous="1 second")
+    .start())
+# Error: Continuous processing does not support aggregate operations
+```
+
+### Semantics
+
+| Guarantee | Continuous | Micro-batch |
+|-----------|------------|-------------|
+| Processing | At-least-once | Exactly-once |
+| Latency | ~1-10ms | ~100ms-seconds |
+| Checkpointing | Async (epoch-based) | Sync (per batch) |
+| Fault recovery | May reprocess some records | No duplicates |
+
+### When to Avoid Continuous Mode
+
+- **Need exactly-once**: Use micro-batch with transactional sinks
+- **Need aggregations**: Use micro-batch with watermarks
+- **Writing to Iceberg/files**: Not supported, use micro-batch
+- **Complex pipelines**: Stick with micro-batch for maintainability
+
+### Micro-batch Alternative for Low Latency
+
+If you need low latency but also aggregations, use short micro-batch intervals:
+
+```python
+# 100ms micro-batches - good balance of latency and features
+query = (df
+    .groupBy(f.window("timestamp", "1 second"))
+    .count()
+    .writeStream
+    .trigger(processingTime="100 milliseconds")  # Fast micro-batches
+    .format("console")
+    .start())
 ```
 
 ## Windowed Aggregations
