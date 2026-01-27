@@ -12,6 +12,9 @@ Claude Code skill files for Apache Spark.
 | [PySpark.md](PySpark.md) | DataFrame API, transformations, actions |
 | [Structured-Streaming.md](Structured-Streaming.md) | Real-time processing, watermarks, triggers |
 | [Spark-SQL.md](Spark-SQL.md) | SQL patterns, window functions, CTEs |
+| [Spark-Connect.md](Spark-Connect.md) | Client-server architecture, remote execution |
+| [Spark-Kubernetes.md](Spark-Kubernetes.md) | K8s deployment, pod templates, RBAC |
+| [Performance-Tuning.md](Performance-Tuning.md) | AQE, partitioning, joins, caching |
 
 ## Usage
 
