@@ -42,8 +42,36 @@ spark = SparkSession.builder.appName("job").getOrCreate()
 | Broadcast join | `df1.join(f.broadcast(df_small), "key")` |
 | Window | `f.row_number().over(Window.partitionBy("x").orderBy("y"))` |
 | Dedupe latest | `df.withColumn("rn", f.row_number().over(w)).filter(f.col("rn")==1)` |
+| Order by | `df.orderBy(f.col("x").desc())` or `df.orderBy(f.desc("x"))` |
 | Safe divide | `f.expr("try_divide(a, b)")` |
 | Safe cast | `df.selectExpr("try_cast(x as int)")` |
+
+## Aggregation Functions
+
+| Task | Code |
+|------|------|
+| Count | `f.count("*")`, `f.count("col")` |
+| Count distinct | `f.countDistinct("col")` |
+| Sum/Avg/Min/Max | `f.sum("col")`, `f.avg("col")`, `f.min("col")`, `f.max("col")` |
+| Percentile | `f.percentile_approx("col", 0.5)` (median) |
+| Percentiles array | `f.percentile_approx("col", [0.25, 0.5, 0.75])` (quartiles) |
+| Collect to list | `f.collect_list("col")`, `f.collect_set("col")` |
+| First/Last | `f.first("col")`, `f.last("col")` |
+
+## Pivot & Unpivot
+
+```python
+# Pivot: rows to columns
+df.groupBy("id").pivot("category", ["A", "B", "C"]).agg(f.sum("value"))
+
+# Result: id | A | B | C (with summed values)
+
+# Unpivot: columns to rows (SQL)
+spark.sql("""
+    SELECT id, category, value
+    FROM table
+    UNPIVOT (value FOR category IN (A, B, C))
+""")
 
 ## Null Handling
 
@@ -67,6 +95,8 @@ spark = SparkSession.builder.appName("job").getOrCreate()
 | Arithmetic | `f.date_add("col", 7)`, `f.date_sub("col", 7)` |
 | Difference | `f.datediff("end", "start")`, `f.months_between("end", "start")` |
 | Truncate | `f.date_trunc("month", "col")`, `f.date_trunc("week", "col")` |
+| Unix timestamp | `f.unix_timestamp("col")` → seconds since epoch |
+| Duration (sec) | `f.unix_timestamp("end") - f.unix_timestamp("start")` |
 
 ## String Functions
 
