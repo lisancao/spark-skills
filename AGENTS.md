@@ -1,0 +1,209 @@
+# Apache Spark 4.1 Documentation Index
+
+> Compressed reference for AI agents. Always in context - no skill invocation required.
+
+## Spark 4.1 Requirements (CRITICAL)
+
+| Dependency | Minimum | Notes |
+|------------|---------|-------|
+| Python | 3.10+ | **Dropped 3.9** |
+| JDK | 17+ | **Dropped 8/11** |
+| Pandas | 2.2.0+ | For pandas API |
+| PyArrow | 15.0.0+ | Arrow-optimized UDFs |
+
+### Breaking Changes (Spark 4.x)
+
+- **ANSI mode ON by default**: Division by zero and invalid casts raise errors
+- **Safe alternatives**: `try_divide()`, `try_cast()`, `try_to_date()`
+- **Removed**: `DataFrame.append()` → use `ps.concat()`
+
+## Standard Imports
+
+```python
+from pyspark.sql import SparkSession, DataFrame
+from pyspark.sql import functions as f
+from pyspark.sql import types as t
+from pyspark.sql.window import Window
+
+spark = SparkSession.builder.appName("job").getOrCreate()
+```
+
+## PySpark DataFrame Quick Reference
+
+| Task | Code |
+|------|------|
+| Filter | `df.filter(f.col("x") > 0)` |
+| Select | `df.select("a", "b")` |
+| Add column | `df.withColumn("new", expr)` |
+| Batch columns (4.1) | `df.withColumns({"a": expr1, "b": expr2})` |
+| Conditional | `f.when(cond, val).otherwise(default)` |
+| Aggregate | `df.groupBy("x").agg(f.sum("y"))` |
+| Join | `df1.join(df2, "key", "left")` |
+| Broadcast join | `df1.join(f.broadcast(df_small), "key")` |
+| Window | `f.row_number().over(Window.partitionBy("x").orderBy("y"))` |
+| Dedupe latest | `df.withColumn("rn", f.row_number().over(w)).filter(f.col("rn")==1)` |
+| Safe divide | `f.expr("try_divide(a, b)")` |
+| Safe cast | `df.selectExpr("try_cast(x as int)")` |
+
+## Spark SQL Quick Reference
+
+| Task | SQL |
+|------|-----|
+| Window rank | `ROW_NUMBER() OVER (PARTITION BY x ORDER BY y)` |
+| Filter window | `QUALIFY ROW_NUMBER() OVER (...) = 1` |
+| CTE | `WITH cte AS (...) SELECT * FROM cte` |
+| Recursive CTE (4.1) | `WITH RECURSIVE r AS (base UNION ALL recursive) SELECT ...` |
+| Merge/upsert | `MERGE INTO target USING source ON ... WHEN MATCHED/NOT MATCHED` |
+| Time travel | `SELECT * FROM table TIMESTAMP AS OF '2024-01-15'` |
+| VARIANT (4.1) | `event_data:field::STRING` for JSON field access |
+
+## Structured Streaming
+
+```python
+# Kafka source
+df = spark.readStream.format("kafka") \
+    .option("kafka.bootstrap.servers", "host:9092") \
+    .option("subscribe", "topic").load()
+
+# Watermark for late data
+df.withWatermark("event_time", "10 minutes")
+
+# Window aggregation
+df.groupBy(f.window("event_time", "5 minutes")).agg(...)
+
+# Iceberg sink
+df.writeStream.format("iceberg") \
+    .option("checkpointLocation", "/path") \
+    .toTable("catalog.db.table")
+```
+
+| Trigger | Use Case |
+|---------|----------|
+| `processingTime="10 seconds"` | Micro-batch interval |
+| `availableNow=True` | Process all, then stop |
+| `continuous="1 second"` | Sub-second latency (limited ops) |
+
+## Spark Declarative Pipelines (SDP)
+
+```python
+from typing import Any
+from pyspark import pipelines as dp
+
+spark: Any  # Framework injects at runtime
+
+@dp.materialized_view(name="silver.orders")  # No catalog prefix!
+def orders():
+    return spark.table("iceberg.bronze.raw")  # Full path with catalog!
+```
+
+**Critical naming:**
+- Decorator: `name="database.table"` (no catalog)
+- spark.table(): `"catalog.database.table"` (full path)
+
+**CLI:**
+```bash
+spark-pipelines dry-run --spec pipeline.yml  # Validate
+spark-pipelines run --spec pipeline.yml      # Execute
+```
+
+## Performance Tuning
+
+### AQE (Enabled by Default)
+```python
+spark.conf.set("spark.sql.adaptive.enabled", "true")
+spark.conf.set("spark.sql.adaptive.coalescePartitions.enabled", "true")
+spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "true")
+```
+
+### Key Configs
+| Config | Default | Recommendation |
+|--------|---------|----------------|
+| `shuffle.partitions` | 200 | data_gb * 2-4 |
+| `autoBroadcastJoinThreshold` | 10m | Up to 100m for larger dims |
+| `advisoryPartitionSizeInBytes` | 64m | 128m-256m for large data |
+
+### Join Hints
+```sql
+SELECT /*+ BROADCAST(small) */ * FROM large JOIN small ...
+SELECT /*+ MERGE(t1) */ * FROM t1 JOIN t2 ...
+SELECT /*+ LEADING(t1, t2, t3) */ * ...  -- Force join order (4.1)
+```
+
+## Spark Connect (Client-Server)
+
+```python
+# Remote connection
+spark = SparkSession.builder.remote("sc://host:15002").getOrCreate()
+
+# All DataFrame operations work; RDD/SparkContext do not
+```
+
+## Spark on Kubernetes
+
+```bash
+spark-submit \
+    --master k8s://https://apiserver:6443 \
+    --deploy-mode cluster \
+    --conf spark.kubernetes.container.image=apache/spark:4.1.0 \
+    --conf spark.kubernetes.authenticate.driver.serviceAccountName=spark \
+    --conf spark.executor.instances=5 \
+    local:///opt/spark/app.jar
+```
+
+## Common Patterns
+
+### Read → Transform → Write
+```python
+(spark.read.table("iceberg.bronze.events")
+    .filter(f.col("date") >= "2024-01-01")
+    .groupBy("type").agg(f.count("*").alias("cnt"))
+    .write.mode("overwrite")
+    .saveAsTable("iceberg.gold.summary"))
+```
+
+### Window: Latest per Key
+```python
+w = Window.partitionBy("customer_id").orderBy(f.col("updated_at").desc())
+df.withColumn("rn", f.row_number().over(w)).filter(f.col("rn") == 1).drop("rn")
+```
+
+### ISO Timestamp Handling
+```python
+# Spark expects space separator, not 'T'
+.withColumn("ts", f.to_timestamp(f.regexp_replace("ts", "T", " ")))
+```
+
+## New in Spark 4.1
+
+| Feature | Description |
+|---------|-------------|
+| Arrow-Native UDFs | `@udf` with PyArrow arrays, bypasses Pandas |
+| IN Subquery | `f.col("id").isin(subquery_df)` |
+| Parameterized SQL | `spark.sql("...WHERE x = :val", args={"val": 1})` |
+| VARIANT type | Semi-structured JSON with `:` field access |
+| SQL Scripting GA | DECLARE, IF/ELSE, WHILE, error handlers |
+| Recursive CTEs | `WITH RECURSIVE` for hierarchies |
+| Join order hints | `/*+ LEADING(t1, t2) */` |
+| approx_top_k | Efficient top-K frequent items |
+| transformWithState | Custom stateful streaming processors |
+
+## Common Errors
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `ArithmeticException: divide by zero` | ANSI mode | Use `try_divide()` |
+| `NumberFormatException` | ANSI invalid cast | Use `try_cast()` |
+| `Column cannot be resolved` | Typo or missing | Check `df.printSchema()` |
+| `OOMError` | Data skew / collect() | Repartition, avoid collect |
+| `Table not found` (SDP) | Wrong path format | Use full `catalog.db.table` in spark.table() |
+
+## Detailed Skills
+
+For comprehensive documentation, see:
+- [PySpark.md](PySpark.md) - DataFrame API
+- [Spark-SQL.md](Spark-SQL.md) - SQL patterns
+- [Structured-Streaming.md](Structured-Streaming.md) - Real-time processing
+- [SDP.md](SDP.md) - Declarative Pipelines
+- [Performance-Tuning.md](Performance-Tuning.md) - Optimization
+- [Spark-Connect.md](Spark-Connect.md) - Client-server
+- [Spark-Kubernetes.md](Spark-Kubernetes.md) - K8s deployment

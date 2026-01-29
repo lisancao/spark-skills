@@ -1,8 +1,25 @@
 # spark-skills
 
-Claude Code skill files for Apache Spark.
+Claude Code documentation for Apache Spark.
 
 > **Validated against Spark 4.1** | [Documentation](https://spark.apache.org/docs/latest/)
+
+## Quick Start
+
+Copy to your project root:
+
+```bash
+cp AGENTS.md your-project/AGENTS.md
+```
+
+The `AGENTS.md` file contains a compressed documentation index that's **always in context** - the agent doesn't need to decide to use it. Based on [Vercel Labs research](https://vercel.com/blog/agents-md-outperforms-skills-in-our-agent-evals), this approach achieves significantly better results than skills that require invocation.
+
+## Architecture
+
+| File | Purpose | When Used |
+|------|---------|-----------|
+| **AGENTS.md** | Compressed index (always loaded) | Every Spark-related task |
+| **Skills (*.md)** | Detailed reference docs | Deep dives, complex patterns |
 
 ## Skills
 
@@ -18,7 +35,17 @@ Claude Code skill files for Apache Spark.
 
 ## Usage
 
-Copy to your project's `.claude/skills/` directory:
+### Recommended: AGENTS.md (Always-in-Context)
+
+Copy the compressed index to your project root:
+
+```bash
+cp spark-skills/AGENTS.md your-project/AGENTS.md
+```
+
+### Optional: Full Skills (Deep Reference)
+
+For detailed documentation, also copy to `.claude/skills/`:
 
 ```bash
 cp -r spark-skills/ your-project/.claude/skills/spark/
