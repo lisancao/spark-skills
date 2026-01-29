@@ -45,6 +45,92 @@ spark = SparkSession.builder.appName("job").getOrCreate()
 | Safe divide | `f.expr("try_divide(a, b)")` |
 | Safe cast | `df.selectExpr("try_cast(x as int)")` |
 
+## Null Handling
+
+| Task | Code |
+|------|------|
+| Filter nulls | `df.filter(f.col("x").isNull())` / `.isNotNull()` |
+| First non-null | `f.coalesce("col1", "col2", f.lit("default"))` |
+| Fill nulls | `df.na.fill(0)` or `df.na.fill({"col1": 0, "col2": "N/A"})` |
+| Drop null rows | `df.na.drop()` or `df.na.drop(subset=["col1", "col2"])` |
+| Null-safe equal | `df.filter(f.col("a").eqNullSafe(f.col("b")))` |
+
+## Date/Time Functions
+
+| Task | Code |
+|------|------|
+| Current | `f.current_date()`, `f.current_timestamp()` |
+| Parse date | `f.to_date("col", "yyyy-MM-dd")` |
+| Parse timestamp | `f.to_timestamp("col", "yyyy-MM-dd HH:mm:ss")` |
+| Format | `f.date_format("col", "yyyy-MM")` |
+| Extract | `f.year("col")`, `f.month("col")`, `f.dayofweek("col")` |
+| Arithmetic | `f.date_add("col", 7)`, `f.date_sub("col", 7)` |
+| Difference | `f.datediff("end", "start")`, `f.months_between("end", "start")` |
+| Truncate | `f.date_trunc("month", "col")`, `f.date_trunc("week", "col")` |
+
+## String Functions
+
+| Task | Code |
+|------|------|
+| Case | `f.lower("col")`, `f.upper("col")`, `f.initcap("col")` |
+| Trim | `f.trim("col")`, `f.ltrim("col")`, `f.rtrim("col")` |
+| Concat | `f.concat("a", "b")`, `f.concat_ws("-", "a", "b", "c")` |
+| Substring | `f.substring("col", 1, 5)` (1-indexed) |
+| Split | `f.split("col", ",")` → array |
+| Regex replace | `f.regexp_replace("col", r"\d+", "X")` |
+| Regex extract | `f.regexp_extract("col", r"(\d+)", 1)` |
+| Contains | `f.col("col").contains("text")` |
+| Like | `f.col("col").like("%pattern%")` |
+
+## Schema Types
+
+```python
+from pyspark.sql.types import (
+    StructType, StructField, StringType, IntegerType,
+    LongType, DoubleType, BooleanType, TimestampType,
+    DateType, ArrayType, MapType, DecimalType
+)
+
+# Define schema
+schema = StructType([
+    StructField("id", StringType(), nullable=False),
+    StructField("amount", DecimalType(10, 2)),
+    StructField("tags", ArrayType(StringType())),
+    StructField("metadata", MapType(StringType(), StringType())),
+])
+
+# Apply to read
+df = spark.read.schema(schema).json("/path")
+```
+
+| Type | Python | Example |
+|------|--------|---------|
+| String | `StringType()` | `"hello"` |
+| Integer | `IntegerType()` | `42` |
+| Long | `LongType()` | `9999999999` |
+| Double | `DoubleType()` | `3.14` |
+| Decimal | `DecimalType(10,2)` | `123.45` |
+| Boolean | `BooleanType()` | `True` |
+| Date | `DateType()` | `2024-01-15` |
+| Timestamp | `TimestampType()` | `2024-01-15 10:30:00` |
+| Array | `ArrayType(StringType())` | `["a", "b"]` |
+| Map | `MapType(StringType(), IntegerType())` | `{"a": 1}` |
+
+## Array & Map Operations
+
+| Task | Code |
+|------|------|
+| Array size | `f.size("arr")` |
+| Array contains | `f.array_contains("arr", "value")` |
+| Explode to rows | `df.select(f.explode("arr").alias("item"))` |
+| Collect to array | `f.collect_list("col")`, `f.collect_set("col")` |
+| Array element | `f.element_at("arr", 1)` (1-indexed) |
+| Map keys/values | `f.map_keys("map")`, `f.map_values("map")` |
+| Map lookup | `f.col("map")["key"]` or `f.element_at("map", "key")` |
+| Struct field | `f.col("struct.field")` or `f.col("struct")["field"]` |
+| JSON parse | `f.from_json("json_col", schema)` |
+| JSON create | `f.to_json(f.struct("col1", "col2"))` |
+
 ## Spark SQL Quick Reference
 
 | Task | SQL |
@@ -82,6 +168,12 @@ df.writeStream.format("iceberg") \
 | `processingTime="10 seconds"` | Micro-batch interval |
 | `availableNow=True` | Process all, then stop |
 | `continuous="1 second"` | Sub-second latency (limited ops) |
+
+| Output Mode | Use Case | Aggregations |
+|-------------|----------|--------------|
+| `append` | New rows only, most sinks | Only with watermark |
+| `update` | Changed rows, dashboards | Yes |
+| `complete` | Full result each batch | Yes (small results only) |
 
 ## Spark Declarative Pipelines (SDP)
 
@@ -171,6 +263,33 @@ df.withColumn("rn", f.row_number().over(w)).filter(f.col("rn") == 1).drop("rn")
 ```python
 # Spark expects space separator, not 'T'
 .withColumn("ts", f.to_timestamp(f.regexp_replace("ts", "T", " ")))
+```
+
+## Testing Patterns
+
+```python
+# Create DataFrame from tuples
+df = spark.createDataFrame([
+    ("alice", 100),
+    ("bob", 200),
+], ["name", "amount"])
+
+# Create DataFrame from dicts
+df = spark.createDataFrame([
+    {"name": "alice", "amount": 100},
+    {"name": "bob", "amount": 200},
+])
+
+# With explicit schema
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType
+schema = StructType([
+    StructField("name", StringType()),
+    StructField("amount", IntegerType()),
+])
+df = spark.createDataFrame([("alice", 100)], schema)
+
+# Empty DataFrame with schema
+df = spark.createDataFrame([], schema)
 ```
 
 ## New in Spark 4.1
